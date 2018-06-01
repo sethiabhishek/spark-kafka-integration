@@ -1,33 +1,23 @@
 package kafka
 
-import java.io.IOException
-import java.sql.Timestamp
-
-import com.fasterxml.jackson.databind.ObjectMapper
 import com.typesafe.config.ConfigFactory
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.serialization.StringDeserializer
 import org.apache.spark.SparkConf
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
-import org.apache.spark.streaming.kafka010.{ConsumerStrategies, ConsumerStrategy, KafkaUtils, LocationStrategies}
+import org.apache.spark.streaming.kafka010.{ConsumerStrategies, KafkaUtils, LocationStrategies}
 import org.apache.spark.streaming.{Seconds, StreamingContext}
+import org.json4s.DefaultFormats
+import org.json4s.jackson.Serialization.read
 
-
-case class RecordBean(ts: String, userid: String, eventid: String)
 
 object UserPaymentsJob extends App {
-  val objectMapper = new ObjectMapper
 
-  def jsonDecode(text: String): RecordBean = {
-    try {
-      objectMapper.readValue(text, classOf[RecordBean])
-    } catch {
-      case e: IOException => print(e.printStackTrace())
-        null
-    }
-  }
+  case class RecordBean(ts: String, userid: String, eventid: String)
+
+  implicit val formats = DefaultFormats
 
   val sparkConf = new SparkConf().setAppName("User-Payment-Integration").setMaster("local[*]")
   val spark = SparkSession.builder.config(sparkConf).getOrCreate()
@@ -50,10 +40,10 @@ object UserPaymentsJob extends App {
 
   val stream = KafkaUtils.createDirectStream(ssc, LocationStrategies.PreferConsistent, ConsumerStrategies.Subscribe[String, String](topics, kafkaParams))
 
-  val userEventsRDD:Unit = stream.foreachRDD((rdd: RDD[Record]) => {
+  val userEventsRDD: Unit = stream.foreachRDD((rdd: RDD[ConsumerRecord[String, String]]) => {
     // convert string to PoJo and generate rows as tuple group
-    val pairs = rdd.map(row => (row.timestamp(), jsonDecode(row.value()))).map(row => (row._2.userid, row._2.eventid))
-    pairs.first()
+    val pairs = rdd.map(row => (row.timestamp(), read[RecordBean](row.value()))).map(row => (row._2.userid, row._2.eventid))
+    pairs.foreachPartition(itr => print(itr.next()))
   })
 
   ssc.start()
